@@ -3,20 +3,21 @@ kind: ConfigMap
 apiVersion: v1
 metadata:
   name: kube-flannel-cfg
-  namespace: "{{system_namespace}}"
+  namespace: "kube-system"
   labels:
     tier: node
     app: flannel
 data:
   cni-conf.json: |
     {
-      "name":"cbr0",
+      "name":"cni0",
       "cniVersion":"0.3.1",
       "plugins":[
         {
           "type":"flannel",
           "delegate":{
             "forceAddress":true,
+            "hairpinMode": true,
             "isDefaultGateway":true
           }
         },
@@ -40,7 +41,7 @@ apiVersion: extensions/v1beta1
 kind: DaemonSet
 metadata:
   name: kube-flannel
-  namespace: "{{system_namespace}}"
+  namespace: "kube-system"
   labels:
     tier: node
     k8s-app: flannel
@@ -51,9 +52,12 @@ spec:
         tier: node
         k8s-app: flannel
     spec:
-{% if rbac_enabled %}
-      serviceAccountName: flannel
+{% if kube_version is version('v1.11.1', '>=') %}
+      priorityClassName: system-node-critical
 {% endif %}
+      serviceAccountName: flannel
+      nodeSelector:
+        beta.kubernetes.io/os: linux
       containers:
       - name: kube-flannel
         image: {{ flannel_image_repo }}:{{ flannel_image_tag }}
@@ -65,7 +69,7 @@ spec:
           requests:
             cpu: {{ flannel_cpu_requests }}
             memory: {{ flannel_memory_requests }}
-        command: [ "/opt/bin/flanneld", "--ip-masq", "--kube-subnet-mgr"{% if flannel_interface is defined %}, "--iface={{ flannel_interface }}"{% endif %} ]
+        command: [ "/opt/bin/flanneld", "--ip-masq", "--kube-subnet-mgr"{% if flannel_interface is defined %}, "--iface={{ flannel_interface }}"{% endif %}{% if flannel_interface_regexp is defined %}, "--iface-regex={{ flannel_interface_regexp }}"{% endif %} ]
         securityContext:
           privileged: true
         env:
@@ -77,6 +81,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
         volumeMounts:
         - name: run
           mountPath: /run
@@ -103,9 +111,10 @@ spec:
           mountPath: /host/opt/cni/bin/
       hostNetwork: true
       tolerations:
-      - key: node-role.kubernetes.io/master
-        operator: Exists
-        effect: NoSchedule
+        - operator: Exists
+        # Mark pod as critical for rescheduling (Will have no effect starting with kubernetes 1.12)
+        - key: CriticalAddonsOnly
+          operator: "Exists"
       volumes:
         - name: run
           hostPath:
@@ -121,5 +130,5 @@ spec:
             path: /opt/cni/bin
   updateStrategy:
     rollingUpdate:
-      maxUnavailable: 1
+      maxUnavailable: {{ serial | default('20%') }}
     type: RollingUpdate

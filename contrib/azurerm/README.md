@@ -9,8 +9,8 @@ Resource Group. It will not install Kubernetes itself, this has to be done in a 
 
 ## Requirements
 
-- [Install azure-cli](https://docs.microsoft.com/en-us/azure/xplat-cli-install)
-- [Login with azure-cli](https://docs.microsoft.com/en-us/azure/xplat-cli-connect)
+- [Install azure-cli](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli?view=azure-cli-latest)
+- [Login with azure-cli](https://docs.microsoft.com/en-us/cli/azure/authenticate-azure-cli?view=azure-cli-latest)
 - Dedicated Resource Group created in the Azure Portal or through azure-cli
 
 ## Configuration through group_vars/all
@@ -59,6 +59,6 @@ It will create the file ./inventory which can then be used with kubespray, e.g.:
 
 ```shell
 $ cd kubespray-root-dir
-$ ansible-playbook -i contrib/azurerm/inventory -u devops --become -e "@inventory/group_vars/all.yml" cluster.yml
+$ ansible-playbook -i contrib/azurerm/inventory -u devops --become -e "@inventory/sample/group_vars/all.yml" cluster.yml
 ```
 

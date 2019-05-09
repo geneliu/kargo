@@ -1,8 +1,10 @@
+[all]
 ${connection_strings_master}
 ${connection_strings_node}
 ${connection_strings_etcd}
+${public_ip_address_bastion}
 
-
+[bastion]
 ${public_ip_address_bastion}
 
 [kube-master]
@@ -24,5 +26,3 @@ kube-master
 
 [k8s-cluster:vars]
 ${elb_api_fqdn}
-${elb_api_port}
-${loadbalancer_apiserver_address}

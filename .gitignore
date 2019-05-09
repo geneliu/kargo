@@ -1,8 +1,6 @@
 .vagrant
 *.retry
-inventory/vagrant_ansible_inventory
-inventory/group_vars/fake_hosts.yml
-inventory/host_vars/
+**/vagrant_ansible_inventory
 temp
 .idea
 .tox
@@ -10,10 +8,18 @@ temp
 *.bak
 *.tfstate
 *.tfstate.backup
-**/*.sw[pon]
+.terraform/
+contrib/terraform/aws/credentials.tfvars
 /ssh-bastion.conf
 **/*.sw[pon]
+*~
 vagrant/
+
+# Ansible inventory
+inventory/*
+!inventory/local
+!inventory/sample
+inventory/*/artifacts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

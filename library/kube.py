@@ -18,7 +18,9 @@ options:
     required: false
     default: null
     description:
-      - The path and filename of the resource(s) definition file.
+      - The path and filename of the resource(s) definition file(s).
+      - To operate on several files this can accept a comma separated list of files or a list of files.
+    aliases: [ 'files', 'file', 'filenames' ]
   kubectl:
     required: false
     default: null
@@ -69,6 +71,13 @@ options:
         latest handles creating or updating based on existence,
         reloaded handles updating resource(s) definition using definition file,
         stopped handles stopping resource(s) based on other options.
+  recursive:
+    required: false
+    default: false
+    description:
+      - Process the directory used in -f, --filename recursively.
+        Useful when you want to manage related manifests organized
+        within the same directory.
 requirements:
   - kubectl
 author: "Kenny Jones (@kenjones-cisco)"
@@ -86,6 +95,15 @@ EXAMPLES = """
 
 - name: test nginx is present
   kube: filename=/tmp/nginx.yml
+
+- name: test nginx and postgresql are present
+  kube: files=/tmp/nginx.yml,/tmp/postgresql.yml
+
+- name: test nginx and postgresql are present
+  kube:
+    files:
+      - /tmp/nginx.yml
+      - /tmp/postgresql.yml
 """
 
 
@@ -109,12 +127,14 @@ class KubeManager(object):
         if module.params.get('namespace'):
             self.base_cmd.append('--namespace=' + module.params.get('namespace'))
 
+
         self.all = module.params.get('all')
         self.force = module.params.get('force')
         self.name = module.params.get('name')
-        self.filename = module.params.get('filename')
+        self.filename = [f.strip() for f in module.params.get('filename') or []]
         self.resource = module.params.get('resource')
         self.label = module.params.get('label')
+        self.recursive = module.params.get('recursive')
 
     def _execute(self, cmd):
         args = self.base_cmd + cmd
@@ -122,7 +142,7 @@ class KubeManager(object):
             rc, out, err = self.module.run_command(args)
             if rc != 0:
                 self.module.fail_json(
-                    msg='error running kubectl (%s) command (rc=%d): %s' % (' '.join(args), rc, out or err))
+                    msg='error running kubectl (%s) command (rc=%d), out=\'%s\', err=\'%s\'' % (' '.join(args), rc, out, err))
         except Exception as exc:
             self.module.fail_json(
                 msg='error running kubectl (%s) command: %s' % (' '.join(args), str(exc)))
@@ -135,30 +155,39 @@ class KubeManager(object):
             return None
         return out.splitlines()
 
-    def create(self, check=True):
+    def create(self, check=True, force=True):
         if check and self.exists():
             return []
 
         cmd = ['apply']
 
+        if force:
+            cmd.append('--force')
+
+        if self.recursive:
+            cmd.append('--recursive={}'.format(self.recursive))
+
         if not self.filename:
             self.module.fail_json(msg='filename required to create')
 
-        cmd.append('--filename=' + self.filename)
+        cmd.append('--filename=' + ','.join(self.filename))
 
         return self._execute(cmd)
 
-    def replace(self):
+    def replace(self, force=True):
 
         cmd = ['apply']
 
-        if self.force:
+        if force:
             cmd.append('--force')
+
+        if self.recursive:
+            cmd.append('--recursive={}'.format(self.recursive))
 
         if not self.filename:
             self.module.fail_json(msg='filename required to reload')
 
-        cmd.append('--filename=' + self.filename)
+        cmd.append('--filename=' + ','.join(self.filename))
 
         return self._execute(cmd)
 
@@ -170,7 +199,9 @@ class KubeManager(object):
         cmd = ['delete']
 
         if self.filename:
-            cmd.append('--filename=' + self.filename)
+            cmd.append('--filename=' + ','.join(self.filename))
+            if self.recursive:
+                cmd.append('--recursive={}'.format(self.recursive))
         else:
             if not self.resource:
                 self.module.fail_json(msg='resource required to delete without filename')
@@ -189,32 +220,41 @@ class KubeManager(object):
             if self.force:
                 cmd.append('--ignore-not-found')
 
+            if self.recursive:
+                cmd.append('--recursive={}'.format(self.recursive))
+
         return self._execute(cmd)
 
     def exists(self):
         cmd = ['get']
 
-        if not self.resource:
-            return False
+        if self.filename:
+            cmd.append('--filename=' + ','.join(self.filename))
+            if self.recursive:
+                cmd.append('--recursive={}'.format(self.recursive))
+        else:
+            if not self.resource:
+                self.module.fail_json(msg='resource required without filename')
 
-        cmd.append(self.resource)
+            cmd.append(self.resource)
 
-        if self.name:
-            cmd.append(self.name)
+            if self.name:
+                cmd.append(self.name)
+
+            if self.label:
+                cmd.append('--selector=' + self.label)
+
+            if self.all:
+                cmd.append('--all-namespaces')
 
         cmd.append('--no-headers')
-
-        if self.label:
-            cmd.append('--selector=' + self.label)
-
-        if self.all:
-            cmd.append('--all-namespaces')
 
         result = self._execute_nofail(cmd)
         if not result:
             return False
         return True
 
+    # TODO: This is currently unused, perhaps convert to 'scale' with a replicas param?
     def stop(self):
 
         if not self.force and not self.exists():
@@ -223,7 +263,9 @@ class KubeManager(object):
         cmd = ['stop']
 
         if self.filename:
-            cmd.append('--filename=' + self.filename)
+            cmd.append('--filename=' + ','.join(self.filename))
+            if self.recursive:
+                cmd.append('--recursive={}'.format(self.recursive))
         else:
             if not self.resource:
                 self.module.fail_json(msg='resource required to stop without filename')
@@ -250,7 +292,7 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             name=dict(),
-            filename=dict(),
+            filename=dict(type='list', aliases=['files', 'file', 'filenames']),
             namespace=dict(),
             resource=dict(),
             label=dict(),
@@ -260,7 +302,9 @@ def main():
             all=dict(default=False, type='bool'),
             log_level=dict(default=0, type='int'),
             state=dict(default='present', choices=['present', 'absent', 'latest', 'reloaded', 'stopped']),
-            )
+            recursive=dict(default=False, type='bool'),
+            ),
+            mutually_exclusive=[['filename', 'list']]
         )
 
     changed = False
@@ -285,8 +329,6 @@ def main():
     else:
         module.fail_json(msg='Unrecognized state %s.' % state)
 
-    if result:
-        changed = True
     module.exit_json(changed=changed,
                      msg='success: %s' % (' '.join(result))
                      )

@@ -1,20 +1,60 @@
 ---
-- include: pre-upgrade.yml
-  tags: k8s-pre-upgrade
+- import_tasks: pre-upgrade.yml
+  tags:
+    - k8s-pre-upgrade
 
-- name: Copy kubectl from hyperkube container
-  command: "{{ docker_bin_dir }}/docker run --rm -v {{ bin_dir }}:/systembindir {{ hyperkube_image_repo }}:{{ hyperkube_image_tag }} /bin/cp /hyperkube /systembindir/kubectl"
-  register: kube_task_result
-  until: kube_task_result.rc == 0
-  retries: 4
-  delay: "{{ retry_stagger | random + 3 }}"
+- import_tasks: users-file.yml
+  when:
+    - kube_basic_auth|default(true)
+
+- name: Create webhook token auth config
+  template:
+    src: webhook-token-auth-config.yaml.j2
+    dest: "{{ kube_config_dir }}/webhook-token-auth-config.yaml"
+  when: kube_webhook_token_auth|default(false)
+
+- import_tasks: encrypt-at-rest.yml
+  when:
+    - kube_encrypt_secret_data
+
+- name: Install | Copy kubectl binary from download dir
+  synchronize:
+    src: "{{ local_release_dir }}/hyperkube-{{ kube_version }}-{{ image_arch }}"
+    dest: "{{ bin_dir }}/kubectl"
+    compress: no
+    perms: yes
+    owner: no
+    group: no
   changed_when: false
-  tags: [hyperkube, kubectl, upgrade]
+  delegate_to: "{{ inventory_hostname }}"
+  tags:
+    - hyperkube
+    - kubectl
+    - upgrade
+
+- name: install | Set kubectl binary permissions
+  file:
+    path: "{{ bin_dir }}/kubectl"
+    mode: "0755"
+    state: file
+  tags:
+    - hyperkube
+    - kubectl
+    - upgrade
+
+- name: Make sure bash_completion.d folder exists
+  file:
+    name: "/etc/bash_completion.d/"
+    state: directory
+  when: ansible_os_family in ["ClearLinux"]
+  tags:
+    - kubectl
 
 - name: Install kubectl bash completion
   shell: "{{ bin_dir }}/kubectl completion bash >/etc/bash_completion.d/kubectl.sh"
   when: ansible_os_family in ["Debian","RedHat"]
-  tags: kubectl
+  tags:
+    - kubectl
 
 - name: Set kubectl bash completion file
   file:
@@ -23,65 +63,15 @@
     group: root
     mode: 0755
   when: ansible_os_family in ["Debian","RedHat"]
-  tags: [kubectl, upgrade]
+  tags:
+    - kubectl
+    - upgrade
 
-- name: Write kube-apiserver manifest
-  template:
-    src: manifests/kube-apiserver.manifest.j2
-    dest: "{{ kube_manifest_dir }}/kube-apiserver.manifest"
-  notify: Master | wait for the apiserver to be running
-  tags: kube-apiserver
+- name: Disable SecurityContextDeny admission-controller and enable PodSecurityPolicy
+  set_fact:
+    kube_apiserver_admission_control: "{{ kube_apiserver_admission_control | default([]) | difference(['SecurityContextDeny']) | union(['PodSecurityPolicy']) | unique }}"
+    kube_apiserver_enable_admission_plugins: "{{ kube_apiserver_enable_admission_plugins | difference(['SecurityContextDeny']) | union(['PodSecurityPolicy']) | unique }}"
+  when: podsecuritypolicy_enabled
 
-- meta: flush_handlers
-
-- name: Write kube system namespace manifest
-  template:
-    src: namespace.j2
-    dest: "{{kube_config_dir}}/{{system_namespace}}-ns.yml"
-  run_once: yes
-  when: inventory_hostname == groups['kube-master'][0]
-  tags: apps
-
-- name: Check if kube system namespace exists
-  command: "{{ bin_dir }}/kubectl get ns {{system_namespace}}"
-  register: 'kubesystem'
-  changed_when: False
-  failed_when: False
-  run_once: yes
-  tags: apps
-
-- name: Create kube system namespace
-  command: "{{ bin_dir }}/kubectl create -f {{kube_config_dir}}/{{system_namespace}}-ns.yml"
-  retries: 4
-  delay: "{{ retry_stagger | random + 3 }}"
-  register: create_system_ns
-  until: create_system_ns.rc == 0
-  changed_when: False
-  when: kubesystem|failed and inventory_hostname == groups['kube-master'][0]
-  tags: apps
-
-- name: Write kube-scheduler kubeconfig
-  template:
-    src: kube-scheduler-kubeconfig.yaml.j2
-    dest: "{{ kube_config_dir }}/kube-scheduler-kubeconfig.yaml"
-  tags: kube-scheduler
-
-- name: Write kube-scheduler manifest
-  template:
-    src: manifests/kube-scheduler.manifest.j2
-    dest: "{{ kube_manifest_dir }}/kube-scheduler.manifest"
-  notify: Master | wait for kube-scheduler
-  tags: kube-scheduler
-
-- name: Write kube-controller-manager kubeconfig
-  template:
-    src: kube-controller-manager-kubeconfig.yaml.j2
-    dest: "{{ kube_config_dir }}/kube-controller-manager-kubeconfig.yaml"
-  tags: kube-controller-manager
-
-- name: Write kube-controller-manager manifest
-  template:
-    src: manifests/kube-controller-manager.manifest.j2
-    dest: "{{ kube_manifest_dir }}/kube-controller-manager.manifest"
-  notify: Master | wait for kube-controller-manager
-  tags: kube-controller-manager
+- name: Include kubeadm setup
+  import_tasks: kubeadm-setup.yml
